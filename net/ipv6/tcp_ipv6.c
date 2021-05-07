@@ -206,7 +206,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 	    !ipv6_addr_equal(&sk->sk_v6_daddr, &usin->sin6_addr)) {
 		tp->rx_opt.ts_recent = 0;
 		tp->rx_opt.ts_recent_stamp = 0;
-		tp->write_seq = 0;
+		WRITE_ONCE(tp->write_seq, 0);
 	}
 
 	sk->sk_v6_daddr = usin->sin6_addr;
@@ -304,10 +304,11 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 
 	if (likely(!tp->repair)) {
 		if (!tp->write_seq)
-			tp->write_seq = secure_tcpv6_seq(np->saddr.s6_addr32,
-							 sk->sk_v6_daddr.s6_addr32,
-							 inet->inet_sport,
-							 inet->inet_dport);
+			WRITE_ONCE(tp->write_seq,
+				   secure_tcpv6_seq(np->saddr.s6_addr32,
+						    sk->sk_v6_daddr.s6_addr32,
+						    inet->inet_sport,
+						    inet->inet_dport));
 		tp->tsoffset = secure_tcpv6_ts_off(sock_net(sk),
 						   np->saddr.s6_addr32,
 						   sk->sk_v6_daddr.s6_addr32);
@@ -1038,6 +1039,11 @@ static int tcp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
 	if (!ipv6_unicast_destination(skb))
 		goto drop;
 
+	if (ipv6_addr_v4mapped(&ipv6_hdr(skb)->saddr)) {
+		__IP6_INC_STATS(sock_net(sk), NULL, IPSTATS_MIB_INHDRERRORS);
+		return 0;
+	}
+
 	return tcp_conn_request(&tcp6_request_sock_ops,
 				&tcp_request_sock_ipv6_ops, sk, skb);
 
@@ -1169,7 +1175,6 @@ static struct sock *tcp_v6_syn_recv_sock(const struct sock *sk, struct sk_buff *
 	newsk->sk_bound_dev_if = ireq->ir_iif;
 
 	/* Now IPv6 options...
-
 	   First: no IPv4 options.
 	 */
 	newinet->inet_opt = NULL;
@@ -1189,7 +1194,6 @@ static struct sock *tcp_v6_syn_recv_sock(const struct sock *sk, struct sk_buff *
 		newnp->flow_label = ip6_flowlabel(ipv6_hdr(skb));
 
 	/* Clone native IPv6 options from listening socket (if any)
-
 	   Yes, keeping reference count would be much more clever,
 	   but we make one more one thing there: reattach optmem
 	   to newsk.
@@ -1295,12 +1299,10 @@ static int tcp_v6_do_rcv(struct sock *sk, struct sk_buff *skb)
 	 */
 
 	/* Do Stevens' IPV6_PKTOPTIONS.
-
 	   Yes, guys, it is the only place in our code, where we
 	   may make it not affecting IPv4.
 	   The rest of code is protocol independent,
 	   and I do not like idea to uglify IPv4.
-
 	   Actually, all the idea behind IPV6_PKTOPTIONS
 	   looks not very well thought. For now we latch
 	   options, received in the last packet, enqueued
@@ -1369,7 +1371,6 @@ csum_err:
 
 ipv6_pktoptions:
 	/* Do you ask, what is it?
-
 	   1. skb was enqueued by tcp.
 	   2. skb is added to tail of read queue, rather than out of order.
 	   3. socket is not in passive state.
@@ -1840,7 +1841,7 @@ static void get_tcp6_sock(struct seq_file *seq, struct sock *sp, int i)
 		 * we might find a transient negative value.
 		 */
 		rx_queue = max_t(int, READ_ONCE(tp->rcv_nxt) -
-				      tp->copied_seq, 0);
+				      READ_ONCE(tp->copied_seq), 0);
 
 	if (inet->transparent)
 		state_seq |= 0x80;
@@ -1854,7 +1855,7 @@ static void get_tcp6_sock(struct seq_file *seq, struct sock *sp, int i)
 		   dest->s6_addr32[0], dest->s6_addr32[1],
 		   dest->s6_addr32[2], dest->s6_addr32[3], destp,
 		   state_seq,
-		   tp->write_seq - tp->snd_una,
+		   READ_ONCE(tp->write_seq) - tp->snd_una,
 		   rx_queue,
 		   timer_active,
 		   jiffies_delta_to_clock_t(timer_expires - jiffies),
